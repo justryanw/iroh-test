@@ -38,7 +38,7 @@
           ...
         }:
         let
-          name = "rust-flake-template";
+          name = "iroh-test";
 
           systemDeps = builtins.attrValues {
             inherit (pkgs)
