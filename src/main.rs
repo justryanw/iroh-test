@@ -1,12 +1,12 @@
 use anyhow::Result;
 use futures_lite::StreamExt;
-use iroh::{protocol::Router, Endpoint, NodeId};
+use iroh::{protocol::Router, Endpoint, NodeAddr, NodeId};
 use iroh_gossip::{
     net::{Event, Gossip, GossipEvent, GossipReceiver},
     proto::TopicId,
 };
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::{collections::HashMap, fmt, str::FromStr};
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -22,6 +22,14 @@ async fn main() -> Result<()> {
         .await?;
 
     let id = TopicId::from_bytes(rand::random());
+
+    let ticket = {
+        let me = endpoint.node_addr().await?;
+        let nodes = vec![me];
+        Ticket { topic: id, nodes }
+    };
+    println!("> ticket to join us: {ticket}");
+
     let node_ids = vec![];
 
     let topic = gossip.subscribe(id, node_ids)?;
@@ -109,5 +117,37 @@ impl Message {
 
     pub fn to_vec(&self) -> Vec<u8> {
         serde_json::to_vec(self).expect("serde_json::to_vec is infallible")
+    }
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct Ticket {
+    topic: TopicId,
+    nodes: Vec<NodeAddr>,
+}
+
+impl Ticket {
+    fn from_bytes(bytes: &[u8]) -> Result<Self> {
+        serde_json::from_slice(bytes).map_err(Into::into)
+    }
+
+    pub fn to_bytes(&self) -> Vec<u8> {
+        serde_json::to_vec(self).expect("serde_json::to_vec is infallibe")
+    }
+}
+
+impl fmt::Display for Ticket {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        let mut text = data_encoding::BASE32_NOPAD.encode(&self.to_bytes()[..]);
+        text.make_ascii_lowercase();
+        write!(f, "{}", text)
+    }
+}
+
+impl FromStr for Ticket {
+    type Err = anyhow::Error;
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let bytes = data_encoding::BASE32_NOPAD.decode(s.to_ascii_uppercase().as_bytes())?;
+        Self::from_bytes(&bytes)
     }
 }
