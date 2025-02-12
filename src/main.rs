@@ -1,4 +1,5 @@
 use anyhow::Result;
+use clap::Parser;
 use futures_lite::StreamExt;
 use iroh::{protocol::Router, Endpoint, NodeAddr, NodeId};
 use iroh_gossip::{
@@ -8,8 +9,39 @@ use iroh_gossip::{
 use serde::{Deserialize, Serialize};
 use std::{collections::HashMap, fmt, str::FromStr};
 
+#[derive(Parser, Debug)]
+struct Args {
+    #[clap(short, long)]
+    name: Option<String>,
+    #[clap(short, long, default_value = "0")]
+    bing_port: u16,
+    #[clap(subcommand)]
+    command: Command,
+}
+
+#[derive(Parser, Debug)]
+enum Command {
+    Open,
+    Join { ticket: String },
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
+    let args = Args::parse();
+
+    let (topic, nodes) = match &args.command {
+        Command::Open => {
+            let topic = TopicId::from_bytes(rand::random());
+            println!("> opening chat room for topic {topic}");
+            (topic, vec![])
+        }
+        Command::Join { ticket } => {
+            let Ticket { topic, nodes } = Ticket::from_str(ticket)?;
+            println!("> joining chat room for topic {topic}");
+            (topic, nodes)
+        }
+    };
+
     let endpoint = Endpoint::builder().discovery_n0().bind().await?;
 
     println!("> our node id: {}", endpoint.node_id());
@@ -21,27 +53,31 @@ async fn main() -> Result<()> {
         .spawn()
         .await?;
 
-    let id = TopicId::from_bytes(rand::random());
-
     let ticket = {
         let me = endpoint.node_addr().await?;
         let nodes = vec![me];
-        Ticket { topic: id, nodes }
+        Ticket { topic, nodes }
     };
     println!("> ticket to join us: {ticket}");
 
-    let node_ids = vec![];
+    let node_ids = nodes.iter().map(|p| p.node_id).collect();
 
-    let topic = gossip.subscribe(id, node_ids)?;
+    if nodes.is_empty() {
+        println!("> waiting for nodes to join us...");
+    } else {
+        println!("> trying to connect to {} nodes...", nodes.len());
+        for node in nodes.into_iter() {
+            endpoint.add_node_addr(node)?;
+        }
+    }
 
-    let (sender, receiver) = topic.split();
+    let (sender, receiver) = gossip.subscribe_and_join(topic, node_ids).await?.split();
+    println!("> connected!");
 
-    let message = Message::AboutMe {
-        from: endpoint.node_id(),
-        name: String::from("ryan"),
-    };
-
-    sender.broadcast(message.to_vec().into()).await?;
+    if let Some(name) = args.name {
+        let message = Message::AboutMe { from: endpoint.node_id(), name };
+        sender.broadcast(message.to_vec().into()).await?;
+    }
 
     tokio::spawn(subscribe_loop(receiver));
 
